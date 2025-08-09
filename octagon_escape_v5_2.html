@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no"/>
+<title>Octagon Escape v5.2 — Physics Toy</title>
+<style>
+  :root {
+    --bg: #0b0e13;
+    --panel: #111826;
+    --ink: #e6f0ff;
+    --accent: #6ee7ff;
+    --muted: #95a3b3;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial; }
+  #ui {
+    position: fixed; inset: 0 0 auto 0; display: flex; gap: .5rem; align-items: center; padding: .6rem .8rem;
+    background: linear-gradient(180deg, rgba(9,12,18,.9), rgba(9,12,18,.65), transparent);
+    -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+    z-index: 10; user-select: none; flex-wrap: wrap;
+  }
+  .btn { border: 0; border-radius: 14px; padding: .55rem .8rem; font-weight: 650; letter-spacing: .2px; background: #1a2333; color: var(--ink); box-shadow: 0 1px 0 rgba(255,255,255,.05) inset, 0 8px 25px rgba(0,0,0,.35); cursor: pointer; transition: transform .06s ease, background .2s ease; }
+  .btn:hover { background: #21304b; } .btn:active { transform: translateY(1px) scale(.995); }
+  #counter { font-variant-numeric: tabular-nums; color: var(--accent); margin-left: .5rem; }
+  #note { margin-left: auto; color: var(--muted); font-size: .9rem; }
+  canvas { display:block; width:100vw; height:100vh; touch-action: manipulation; }
+  #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; background: rgba(18,25,36,.9); color: var(--ink); padding: .5rem .8rem; border-radius: 12px; font-size: .9rem; opacity: 0; pointer-events: none; transition: opacity .25s ease; }
+  #toast.show { opacity: 1; }
+  label.inline { display:flex; align-items:center; gap:.4rem; }
+  input[type="checkbox"] { width:18px; height:18px; }
+  input[type="range"] { appearance: none; height: 6px; border-radius: 999px; background: #293449; outline: none; width: 140px; }
+  input[type="range"]::-webkit-slider-thumb { appearance: none; width:18px; height:18px; border-radius: 50%; background: #6ee7ff; box-shadow: 0 0 0 2px #0a111c; }
+  input[type="range"]::-moz-range-thumb { width:18px; height:18px; border-radius: 50%; background: #6ee7ff; border: 2px solid #0a111c; }
+  small.muted { color: var(--muted); }
+  #err {
+    position: fixed; inset: 0; display:none; align-items:center; justify-content:center; text-align:center; padding:2rem; z-index: 9999;
+    background: rgba(10,16,26,.92); color:#ffb4b4; font-weight:600; line-height:1.45;
+  }
+  #hud {
+    position: fixed; right: 10px; bottom: 10px; z-index: 9; font-size: 12px; color: #94a3b8; background: rgba(11,14,19,.55); padding: 8px 10px; border-radius: 10px;
+  }
+</style>
+</head>
+<body>
+<div id="ui">
+  <button id="spin" class="btn">Spin</button>
+  <button id="pause" class="btn">Pause</button>
+  <button id="reset" class="btn">Reset</button>
+  <button id="add" class="btn">Add Octagon</button>
+  <button id="drop" class="btn">Drop Ball</button>
+  <button id="clear" class="btn">Clear Escaped</button>
+  <button id="bombnow" class="btn">Bomb Now</button>
+  <label style="margin-left:.4rem;">Octagons: <span id="scount">1</span></label>
+  <label style="margin-left:1rem;">Balls: <span id="counter">0</span></label>
+  <label style="margin-left:1rem;" class="inline">
+    <input id="engine" type="checkbox"/>
+    <span>Engine</span>
+  </label>
+  <label style="margin-left:1rem;" class="inline">
+    <span>Volume</span>
+    <input id="vol" type="range" min="0" max="100" value="80"/>
+    <small id="volval" class="muted">80%</small>
+  </label>
+  <label style="margin-left:1rem;" class="inline">
+    <input id="bake" type="checkbox"/>
+    <span>Bake Frozen (perf)</span>
+  </label>
+  <div id="note">Tap an octagon to spin. Drop a ball to start. (E toggles engine, D drops, B bombs)</div>
+</div>
+<canvas id="c"></canvas>
+<div id="toast"></div>
+<div id="err"></div>
+<div id="hud">fps: <span id="hfps">—</span> | balls: <span id="hballs">0</span> | oct: <span id="hoct">0</span> | voices: <span id="hvox">0</span></div>
+<script>
+// Error overlay
+(function(){
+  const el = document.getElementById('err');
+  window.addEventListener('error', (e)=>{
+    el.style.display='flex';
+    el.innerHTML = '💥 Something threw an exception.<br/><br/><code>'+String(e.message)+'</code><br/><br/>Open DevTools → Console and paste me the first error line.';
+  });
+  window.addEventListener('unhandledrejection', (e)=>{
+    el.style.display='flex';
+    el.innerHTML = '💥 Unhandled rejection.<br/><br/><code>'+String(e.reason)+'</code>';
+  });
+})();
+
+(function init(){
+  try {
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Canvas 2D context unavailable');
+    // UI refs
+    const ui = {
+      counter: document.getElementById('counter'),
+      spin: document.getElementById('spin'),
+      pause: document.getElementById('pause'),
+      reset: document.getElementById('reset'),
+      add: document.getElementById('add'),
+      drop: document.getElementById('drop'),
+      clear: document.getElementById('clear'),
+      bombnow: document.getElementById('bombnow'),
+      scount: document.getElementById('scount'),
+      engine: document.getElementById('engine'),
+      vol: document.getElementById('vol'),
+      volval: document.getElementById('volval'),
+      bake: document.getElementById('bake'),
+      toast: document.getElementById('toast'),
+      hud: {
+        fps: document.getElementById('hfps'),
+        balls: document.getElementById('hballs'),
+        oct: document.getElementById('hoct'),
+        vox: document.getElementById('hvox'),
+      }
+    };
+
+    // ---- Bake (declare before fit/resize) ----
+    let bakeEnabled=false;
+    const bake={ c:null, g:null,
+      ensure(){ if(!this.c){ this.c=document.createElement('canvas'); this.g=this.c.getContext('2d'); resizeBake(); } }
+    };
+    function resizeBake(){ if(!bake.c) return; bake.c.width=canvas.clientWidth|0; bake.c.height=canvas.clientHeight|0; bake.g.clearRect(0,0,bake.c.width,bake.c.height); }
+
+    // Fit
+    let W = 0, H = 0, dpr = Math.max(1, devicePixelRatio || 1);
+    function fit() {
+      W = canvas.clientWidth | 0;
+      H = canvas.clientHeight | 0;
+      canvas.width = (W * dpr) | 0;
+      canvas.height = (H * dpr) | 0;
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+      resizeBake();
+    }
+    addEventListener('resize', fit, {passive:true});
+    fit();
+
+    // Audio
+    const Sound = {
+      AC: null, master: null, voiceCount: 0, MAX_VOICES: 20, lastHitAt: 0,
+      ensure(){ if (!this.AC){ this.AC = new (window.AudioContext||window.webkitAudioContext)(); this.master = this.AC.createGain(); this.master.connect(this.AC.destination); this.setVolume((+ui.vol.value||0)/100); } if (this.AC.state!=='running') this.AC.resume(); },
+      setVolume(x){ if (!this.AC||!this.master) return; const g=x*x; this.master.gain.setTargetAtTime(g,this.AC.currentTime,0.01); ui.volval.textContent = Math.round(x*100)+'%'; },
+      hitBufs: null, boomBuf: null,
+      mkHit(freq=300, dur=0.12){ const sr=this.AC.sampleRate, len=(sr*dur)|0, buf=this.AC.createBuffer(1,len,sr), d=buf.getChannelData(0); let ph=0, dp=2*Math.PI*freq/sr; for(let i=0;i<len;i++){ const env=Math.exp(-i/(sr*0.04)); d[i]=Math.sin(ph)*env*0.6+(Math.random()*2-1)*env*0.15; ph+=dp; } return buf; },
+      mkBoom(){ const sr=this.AC.sampleRate, len=(sr*0.4)|0, buf=this.AC.createBuffer(1,len,sr), d=buf.getChannelData(0); let ph=0; for(let i=0;i<len;i++){ const t=i/sr, env=Math.exp(-t/0.22), dp=2*Math.PI*(220-140*t)/sr; ph+=dp; d[i]=(Math.sin(ph)*0.5+(Math.random()*2-1)*0.4)*env; } return buf; },
+      initBank(){ if (!this.hitBufs){ this.hitBufs=[180,260,340,420,520,680].map(f=>this.mkHit(f,0.09+Math.random()*0.06)); this.boomBuf=this.mkBoom(); } },
+      playHit(impact, pan=0){ this.ensure(); this.initBank(); if (this.voiceCount>=this.MAX_VOICES) return; const now=this.AC.currentTime; if (now-this.lastHitAt<0.008) return; this.lastHitAt=now; const src=this.AC.createBufferSource(); const g=this.AC.createGain(); const p=(this.AC.createStereoPanner?this.AC.createStereoPanner():null); src.buffer=this.hitBufs[(Math.random()*this.hitBufs.length)|0]; const vol=Math.min(0.6, Math.max(0.08, impact/900)); g.gain.setValueAtTime(vol, now); if (p){ src.connect(g).connect(p).connect(this.master); p.pan.value=Math.max(-1,Math.min(1,pan)); } else { src.connect(g).connect(this.master); } this.voiceCount++; src.onended=()=>{ this.voiceCount=Math.max(0,this.voiceCount-1); }; try{ src.start(); }catch(e){} },
+      playBoom(){ this.ensure(); this.initBank(); if (this.voiceCount>=this.MAX_VOICES-2) return; const now=this.AC.currentTime; const src=this.AC.createBufferSource(); const g=this.AC.createGain(); src.buffer=this.boomBuf; g.gain.setValueAtTime(0.6, now); src.connect(g).connect(this.master); this.voiceCount++; src.onended=()=>{ this.voiceCount=Math.max(0,this.voiceCount-1); }; try{ src.start(); }catch(e){} }
+    };
+    ui.vol.addEventListener('input', ()=>{ Sound.ensure(); Sound.setVolume((+ui.vol.value||0)/100); });
+
+    // Utils
+    const rand=(a,b)=>a+Math.random()*(b-a);
+    const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+    function showToast(txt,ms=1500){ ui.toast.textContent=txt; ui.toast.classList.add('show'); clearTimeout(showToast._t); showToast._t=setTimeout(()=>ui.toast.classList.remove('show'),ms); }
+
+    // World knobs
+    const GRAVITY=1200, WALL_RESTITUTION=0.40, BALL_RESTITUTION=0.55, FRICTION=0.020;
+    const GRID=64, MAX_BALL_R=16;
+    const FLOOR_Y=()=>H-24, CULL_Y=()=>H+240;
+
+    // Engine
+    const ENGINE_SPEED=3.2, ENGINE_GAIN=10.0, ENGINE_TMAX=12.0, ENGINE_MIN_RPM=0.8;
+
+    // Bomb
+    let bombTimer=0, bombInterval=rand(6,12), activeBomb=null, fpsEMA=60;
+    const BOMB_TTL=7.0, BOMB_IMPACT_THRESHOLD=120;
+    const explosions=[];
+
+    class Ball {
+      constructor(x,y,r,color,insideId=null){ this.x=x; this.y=y; this.vx=0; this.vy=0; this.r=r|0; this.color=color; this.insideId=insideId; this.sleep=0; this.frozen=false; this.isBomb=false; this.bombTTL=0; this.lastSoundAt=0; this.id=Ball._next++; }
+    }
+    Ball._next=1;
+    class Octagon {
+      constructor(cx,cy,span,gapEdgeIndex=0){ this.cx=cx; this.cy=cy; this.span=span; this.n=8; this.apo=span/2; this.R=this.apo/Math.cos(Math.PI/this.n); this.angle=0; this.omega=0; this.gapEdgeIndex=gapEdgeIndex%this.n; this.gapFrac=0.1; this.enabled=true; this.id=Octagon._next++; this.engineDir=Math.random()<.5?-1:1; this.updateGapToFitBalls(); }
+      sideLength(){ return 2*this.R*Math.sin(Math.PI/this.n); }
+      updateGapToFitBalls(){ const desired=2*MAX_BALL_R+2; const frac=clamp(desired/this.sideLength(),0.02,0.5); this.gapFrac=frac; }
+    }
+    Octagon._next=1;
+
+    const shapes=[], balls=[];
+    let engineOn=false;
+
+    function nonOverlappingCenter(span,tries=160){
+      const R=span/2/Math.cos(Math.PI/8);
+      const marginX=R+24, marginYTop=R+90, marginYBot=R+24;
+      for(let i=0;i<tries;i++){ const cx=rand(marginX,W-marginX), cy=rand(marginYTop,H-marginYBot); let ok=true;
+        for(const s of shapes){ const minDist=(R+s.R)+36; if (Math.hypot(cx-s.cx,cy-s.cy)<minDist){ ok=false; break; } }
+        if(ok) return {x:cx,y:cy};
+      } return null;
+    }
+    function addOctagon(pos){ const span=Math.min(560, Math.max(340, Math.min(W,H)*0.58)); const center=pos||nonOverlappingCenter(span); if(!center){ showToast('No room for another octagon.'); return null; } const gapEdge=shapes.length%8; const s=new Octagon(center.x,center.y,span,gapEdge); shapes.push(s); ui.scount.textContent=String(shapes.length); return s; }
+    function spawnBallFromCeiling(shape){ const r=10+Math.random()*6; const x=shape.cx+(Math.random()*16-8); const y=shape.cy-(shape.apo-r-3); const b=new Ball(x,y,r|0,`hsl(${Math.random()*360}deg 80% 60%)`,shape.id); balls.push(b); return b; }
+
+    // Geometry helpers
+    function polygonVertices(shape){ const n=8,R=shape.R,verts=[],offset=Math.PI/n; for(let i=0;i<n;i++){ const a=offset+i*(2*Math.PI/n)+shape.angle; verts.push({x:shape.cx+R*Math.cos(a), y:shape.cy+R*Math.sin(a)}); } return verts; }
+    function edgesWithNormals(shape){ const v=polygonVertices(shape), edges=[]; for(let i=0;i<v.length;i++){ const a=v[i], b=v[(i+1)%v.length]; const ex=b.x-a.x, ey=b.y-a.y, len=Math.hypot(ex,ey)||1; const nx=-ey/len, ny=ex/len; edges.push({a,b,len,n:{x:nx,y:ny},index:i}); } return edges; }
+    function splitEdgeForGap(edge,gapFrac){ const g=Math.max(0,Math.min(0.9,gapFrac)), t0=(1-g)/2, t1=(1+g)/2; const ax=edge.a.x, ay=edge.a.y, bx=edge.b.x, by=edge.b.y;
+      return [{a:{x:ax,y:ay}, b:{x:ax+(bx-ax)*t0, y:ay+(by-ay)*t0}, n:edge.n}, {a:{x:ax+(bx-ax)*t1, y:ay+(by-ay)*t1}, b:{x:bx,y:by}, n:edge.n}];
+    }
+    function pointOnSegmentClosest(p,a,b){ const abx=b.x-a.x, aby=b.y-a.y, apx=p.x-a.x, apy=p.y-a.y, ab2=abx*abx+aby*aby; let t=ab2<=1e-9?0:(apx*abx+apy*aby)/ab2; t=Math.max(0,Math.min(1,t)); return {x:a.x+abx*t, y:a.y+aby*t, t}; }
+    function wallVelocityAtPoint(shape,x,y){ const rx=x-shape.cx, ry=y-shape.cy; return {x:-shape.omega*ry, y:shape.omega*rx}; }
+
+    // Collisions
+    function collideBallWithShape(ball, shape, impactCallback){
+      const edges=edgesWithNormals(shape); let any=false;
+      for(const e of edges){
+        let segments=[{a:e.a,b:e.b,n:e.n}];
+        if (e.index===shape.gapEdgeIndex) segments=splitEdgeForGap(e,shape.gapFrac);
+        for(const seg of segments){
+          const q=pointOnSegmentClosest(ball,seg.a,seg.b);
+          const dx=ball.x-q.x, dy=ball.y-q.y, dist=Math.hypot(dx,dy);
+          if (dist < ball.r - 0.01){
+            const nx=dx/(dist||1e-6), ny=dy/(dist||1e-6);
+            const vwall=wallVelocityAtPoint(shape,q.x,q.y);
+            const vrelx=ball.vx - vwall.x, vrely=ball.vy - vwall.y;
+            const vrelAlongN=vrelx*nx + vrely*ny;
+            const pen=(ball.r - dist) + 0.01; ball.x += nx*pen; ball.y += ny*pen;
+            if (vrelAlongN < 0){
+              const jn=-(1+WALL_RESTITUTION)*vrelAlongN; ball.vx += jn*nx; ball.vy += jn*ny;
+              const tx=-ny, ty=nx, vrelT=(vrelx*tx+vrely*ty), jt=-FRICTION*vrelT; ball.vx += jt*tx; ball.vy += jt*ty;
+              const rx=q.x-shape.cx, ry=q.y-shape.cy, Jx=jn*nx+jt*tx, Jy=jn*ny+jt*ty, torque=rx*Jy - ry*Jx; shape.omega += (-torque/(shape.span*shape.span/4+1));
+              const tnow=performance.now(); if (tnow-(ball.lastSoundAt||0)>50){ Sound.playHit(Math.abs(vrelAlongN),(q.x-shape.cx)/shape.R); ball.lastSoundAt=tnow; }
+              if (impactCallback) impactCallback(Math.abs(vrelAlongN), q.x, q.y);
+            }
+            any=true;
+          }
+        }
+      } return any;
+    }
+    function ballEscaped(ball,shape){ const edges=edgesWithNormals(shape), e=edges[shape.gapEdgeIndex]; const px=ball.x-e.a.x, py=ball.y-e.a.y; const ex=e.b.x-e.a.x, ey=e.b.y-e.a.y, el2=ex*ex+ey*ey; const nx=e.n.x, ny=e.n.y; const d=px*nx + py*ny; const t=el2<=1e-12?0:((px*ex+py*ey)/el2); const g0=(1-shape.gapFrac)/2, g1=(1+shape.gapFrac)/2; return (t>=g0 && t<=g1 && d < -ball.r); }
+    function collideBallWithFloorAndWalls(b){ const floor=FLOOR_Y(); if (b.y + b.r > floor){ b.y=floor-b.r; if (b.vy>0){ Sound.playHit(Math.abs(b.vy)); b.vy = -b.vy*BALL_RESTITUTION; } b.vx *= (1-0.06); } if (b.x - b.r < 0){ b.x=b.r; if (b.vx<0){ Sound.playHit(Math.abs(b.vx)); b.vx=-b.vx*BALL_RESTITUTION; } } if (b.x + b.r > W){ b.x=W-b.r; if (b.vx>0){ Sound.playHit(Math.abs(b.vx)); b.vx=-b.vx*BALL_RESTITUTION; } } }
+    function collideBallBall(a,b){ const dx=b.x-a.x, dy=b.y-a.y, dist=Math.hypot(dx,dy), R=a.r+b.r; if (dist<=0||dist>=R) return false; const nx=dx/dist, ny=dy/dist; const rvx=b.vx-a.vx, rvy=b.vy-a.vy, velAlongN=rvx*nx + rvy*ny; if (velAlongN>0) return false; const e=BALL_RESTITUTION, j=-(1+e)*velAlongN/2, jx=j*nx, jy=j*ny; const aF=a.frozen, bF=b.frozen; if (aF&&bF) return false; if (aF){ b.vx+=2*jx; b.vy+=2*jy; } else if (bF){ a.vx-=2*jx; a.vy-=2*jy; } else { a.vx-=jx; a.vy-=jy; b.vx+=jx; b.vy+=jy; } const pen=(R-dist), corr=(pen/2)+0.02; if (!aF&&!bF){ a.x-=nx*corr; a.y-=ny*corr; b.x+=nx*corr; b.y+=ny*corr; } else if (aF){ b.x+=nx*(corr*2); b.y+=ny*(corr*2);} else if (bF){ a.x-=nx*(corr*2); a.y-=ny*(corr*2);} return true; }
+
+    // Spatial hash
+    function hash(x,y){ return ((x|0)<<16) ^ (y|0); }
+    function buildGrid(includeInside=false, includeFrozen=true){
+      const map=new Map();
+      for(let i=0;i<balls.length;i++){ const b=balls[i]; if (!includeInside && b.insideId!==null) continue; if (!includeFrozen && b.frozen) continue; const gx=(b.x/GRID)|0, gy=(b.y/GRID)|0; const key=hash(gx,gy); let cell=map.get(key); if(!cell){ cell=[]; map.set(key,cell);} cell.push(i); }
+      return map;
+    }
+
+    // Bomb helpers
+    function pickBombCandidate(){ if (activeBomb) return null; const candidates=balls.filter(b=>!b.frozen && !b.isBomb); if (!candidates.length) return null; const b=candidates[(Math.random()*candidates.length)|0]; b.isBomb=true; b.bombTTL=BOMB_TTL; activeBomb=b; return b; }
+    function explodeBall(centerBall,strength=1){ if (!centerBall) return; const R=80+Math.random()*60; explosions.push({x:centerBall.x, y:centerBall.y, r:R, life:0.35}); Sound.playBoom(); const target=Math.min(80, (balls.length*0.02)|0); let removed=0; for(let i=balls.length-1;i>=0;i--){ const b=balls[i]; if (b===centerBall) continue; const dx=b.x-centerBall.x, dy=b.y-centerBall.y, d=Math.hypot(dx,dy); if (d<R){ const chance=b.frozen?0.95:0.4; if (Math.random()<chance){ balls.splice(i,1); removed++; if (removed>=target) break; } else { const nx=(dx/(d||1e-6)), ny=(dy/(d||1e-6)), kick=500+Math.random()*600; b.vx+=nx*(kick/Math.max(1,b.r)); b.vy+=ny*(kick/Math.max(1,b.r)); b.frozen=false; b.sleep=0; } } } const idx=balls.indexOf(centerBall); if (idx>=0) balls.splice(idx,1); activeBomb=null; }
+
+    // World: start with one shape
+    addOctagon();
+
+    // Input
+    function spinAll(){ Sound.ensure(); for(const s of shapes){ const sgn=Math.random()<.5?-1:1; s.omega += sgn*rand(0.8,1.6); } }
+    function pauseAll(){ for(const s of shapes) s.omega=0; }
+    ui.spin.addEventListener('click', ()=>{ Sound.ensure(); spinAll(); });
+    ui.pause.addEventListener('click', ()=>{ Sound.ensure(); pauseAll(); });
+    ui.reset.addEventListener('click', ()=>{ Sound.ensure(); resetWorld(); });
+    ui.add.addEventListener('click', ()=>{ Sound.ensure(); addOctagon(); });
+    ui.drop.addEventListener('click', ()=>{ Sound.ensure(); const target=shapes[shapes.length-1]; if (target) spawnBallFromCeiling(target); });
+    ui.clear.addEventListener('click', ()=>{ for(let i=balls.length-1;i>=0;i--) if (balls[i].insideId===null) balls.splice(i,1); showToast('Cleared escaped balls'); });
+    ui.engine.addEventListener('change', ()=>{ Sound.ensure(); engineOn=ui.engine.checked; });
+    ui.bombnow.addEventListener('click', ()=>{ Sound.ensure(); if (!activeBomb){ const cand=pickBombCandidate(); if (cand) showToast('💣 Bomb primed (manual)'); } else { explodeBall(activeBomb,1.0); } });
+    canvas.addEventListener('pointerdown', (e)=>{ Sound.ensure(); const rect=canvas.getBoundingClientRect(); const x=(e.clientX-rect.left), y=(e.clientY-rect.top); let best=null, bestD=1e9; for(const s of shapes){ const d=Math.hypot(x-s.cx, y-s.cy); if (d<=s.R+12 && d<bestD){ best=s; bestD=d; } } const impulse=(Math.random()<.5?-1:1)*rand(0.8,1.8); if (best) best.omega += impulse; else spinAll(); });
+
+    // Loop
+    let last=performance.now();
+    function frame(now){
+      requestAnimationFrame(frame);
+      const dt=Math.min(0.033, (now-last)/1000); last=now; fpsEMA=fpsEMA*0.9 + (1/dt)*0.1;
+
+      // Engine dynamics
+      for(const s of shapes){
+        let load=0; for(const b of balls){ const dx=b.x-s.cx, dy=b.y-s.cy, d=Math.hypot(dx,dy); if (d < s.R*1.1) load++; }
+        const tmax=ENGINE_TMAX*(1+load*0.05);
+        if (engineOn){ const target=s.engineDir*ENGINE_SPEED, err=target - s.omega, torque=clamp(err*ENGINE_GAIN, -tmax, tmax); s.omega += torque*dt; const min=ENGINE_MIN_RPM*Math.sign(target); if (Math.sign(s.omega)===Math.sign(target) && Math.abs(s.omega)<Math.abs(min)) s.omega=min; }
+        else s.omega *= (1 - 0.001);
+        s.angle += s.omega*dt;
+      }
+
+      // Integrate
+      for(let i=balls.length-1;i>=0;i--){
+        const b=balls[i];
+        if (b.insideId===null && b.y - b.r > CULL_Y()){ balls.splice(i,1); continue; }
+        if (!b.frozen){ b.vy += GRAVITY*dt; b.vx *= (1-0.002); b.vy *= (1-0.002); b.x += b.vx*dt; b.y += b.vy*dt; }
+        const nearFloor=b.y + b.r >= FLOOR_Y()-0.5, speed2=b.vx*b.vx + b.vy*b.vy;
+        if (b.insideId===null && nearFloor && speed2<2){ b.sleep=Math.min(120, b.sleep+1); if (b.sleep>60) b.frozen=true; }
+        else if (speed2>9){ b.frozen=false; b.sleep=0; }
+        if (b.isBomb){ b.bombTTL -= dt; if (b.bombTTL<=0) explodeBall(b,1.0); }
+      }
+
+      // Shape collisions + escape (inside)
+      for(const s of shapes){
+        for(const b of balls){
+          if (b.insideId !== s.id) continue;
+          collideBallWithShape(b, s, (impact)=>{ if (b.isBomb && impact>120) explodeBall(b, impact/200); });
+          if (ballEscaped(b,s)){
+            b.insideId=null;
+            const mult = fpsEMA<35?1:2;
+            for(let k=0;k<mult;k++){ const nb=spawnBallFromCeiling(s); if (nb) nb.vx += rand(-30,30); }
+          }
+        }
+      }
+
+      // Outside collisions + floor
+      for(const s of shapes){ for(const b of balls){ if (b.insideId!==null) continue; collideBallWithShape(b,s,(impact)=>{ if (b.isBomb && impact>120) explodeBall(b, impact/200); }); } }
+      for(const b of balls){ if (b.insideId!==null) continue; collideBallWithFloorAndWalls(b); }
+
+      // Ball-ball (two passes)
+      function resolvePairs(includeInside=false){
+        const grid=buildGrid(includeInside,true);
+        for(const [key, idxs] of grid.entries()){
+          const gx=(key>>16), gy=(key & 0xffff);
+          for(let oy=-1;oy<=1;oy++) for(let ox=-1;ox<=1;ox++){
+            const nbrKey=hash(gx+ox, gy+oy), cellA=idxs, cellB=grid.get(nbrKey); if (!cellB) continue;
+            for(let ia=0; ia<cellA.length; ia++){ const i=cellA[ia], a=balls[i];
+              for(let jb=0; jb<cellB.length; jb++){ const j=cellB[jb]; if (j<=i && cellB===cellA) continue; const b=balls[j];
+                if (a.insideId!==null && b.insideId!==null && a.insideId!==b.insideId) continue;
+                collideBallBall(a,b);
+              }
+            }
+          }
+        }
+      }
+      resolvePairs(true); resolvePairs(false);
+
+      // Bomb scheduling
+      bombTimer += dt;
+      const bias=clamp((balls.length-250)/300 + (30 - fpsEMA)/30, 0, 3);
+      if (!activeBomb && bombTimer > bombInterval/(1+bias)){ const cand=pickBombCandidate(); if (cand){ showToast('💣 Bomb primed'); bombTimer=0; bombInterval=rand(6,12); } else { bombTimer=0.5; } }
+
+      // Explosions visuals
+      for (let i=explosions.length-1;i>=0;i--){ explosions[i].life -= dt; if (explosions[i].life<=0) explosions.splice(i,1); }
+
+      // Render
+      ctx.clearRect(0,0,W,H);
+      drawBackground(); drawFloor(); for(const s of shapes) drawOctagon(s); drawExplosions(); drawBalls(); if (bakeEnabled && bake.c) ctx.drawImage(bake.c,0,0);
+
+      // HUD
+      ui.counter.textContent=String(balls.length);
+      ui.hud.fps.textContent = (fpsEMA|0);
+      ui.hud.balls.textContent = String(balls.length);
+      ui.hud.oct.textContent = String(shapes.length);
+      ui.hud.vox.textContent = Sound.voiceCount;
+    }
+    requestAnimationFrame(frame);
+
+    // Drawing
+    function drawBackground(){ const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,'#0e1420'); g.addColorStop(1,'#0a0f18'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H); }
+    function drawFloor(){ ctx.save(); ctx.fillStyle='#0f1522'; ctx.fillRect(0, FLOOR_Y(), W, H); ctx.restore(); }
+    function drawOctagon(shape){ const edges=edgesWithNormals(shape); ctx.save(); ctx.lineWidth=8; ctx.lineJoin='round'; ctx.strokeStyle='#6ee7ff'; ctx.shadowColor='#1c5d77'; ctx.shadowBlur=12; ctx.beginPath(); for(const e of edges){ if (e.index===shape.gapEdgeIndex){ const [s1,s2]=splitEdgeForGap(e,shape.gapFrac); ctx.moveTo(s1.a.x,s1.a.y); ctx.lineTo(s1.b.x,s1.b.y); ctx.moveTo(s2.a.x,s2.a.y); ctx.lineTo(s2.b.x,s2.b.y);} else { ctx.moveTo(e.a.x,e.a.y); ctx.lineTo(e.b.x,e.b.y);} } ctx.stroke(); ctx.restore(); }
+    function drawExplosions(){ ctx.save(); for(const ex of explosions){ const t=Math.max(0,Math.min(1, ex.life/0.35)); ctx.beginPath(); ctx.arc(ex.x, ex.y, ex.r*(1-t*0.4), 0, Math.PI*2); ctx.strokeStyle=`rgba(255,220,180,${t})`; ctx.lineWidth=3+6*t; ctx.stroke(); } ctx.restore(); }
+    function drawBalls(){ for(const b of balls){ const grad=ctx.createRadialGradient(b.x-b.r*0.35,b.y-b.r*0.35,b.r*0.15,b.x,b.y,b.r); if (b.insideId!==null){ grad.addColorStop(0,b.color); grad.addColorStop(1,'#101828'); } else { grad.addColorStop(0,b.color); grad.addColorStop(1,'#0c1220'); } ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fillStyle=grad; ctx.fill(); ctx.lineWidth=1.5; ctx.strokeStyle='rgba(255,255,255,.15)'; ctx.stroke(); if (b.isBomb){ const pulse=0.5+0.5*Math.sin(performance.now()/120); ctx.beginPath(); ctx.arc(b.x,b.y,b.r+4+3*pulse,0,Math.PI*2); ctx.strokeStyle='rgba(255,80,80,.6)'; ctx.lineWidth=2; ctx.stroke(); } } }
+
+    function resetWorld(){ balls.length=0; shapes.length=0; explosions.length=0; Octagon._next=1; Ball._next=1; activeBomb=null; bombTimer=0; bombInterval=rand(6,12); addOctagon(); showToast('Reset.'); }
+
+    // Start
+    showToast('Ready. Drop a ball to start.');
+    ui.counter.textContent='0';
+
+    // Keys
+    addEventListener('keydown', (e)=>{
+      if (e.key===' ') { Sound.ensure(); spinAll(); }
+      if (e.key.toLowerCase()==='r') { Sound.ensure(); resetWorld(); }
+      if (e.key.toLowerCase()==='a') { Sound.ensure(); addOctagon(); }
+      if (e.key.toLowerCase()==='p') { Sound.ensure(); pauseAll(); }
+      if (e.key.toLowerCase()==='d') { Sound.ensure(); const t=shapes[shapes.length-1]; if (t) spawnBallFromCeiling(t); }
+      if (e.key.toLowerCase()==='e') { Sound.ensure(); ui.engine.checked=!ui.engine.checked; engineOn=ui.engine.checked; }
+      if (e.key.toLowerCase()==='b') { Sound.ensure(); if (!activeBomb){ const c=pickBombCandidate(); if (c) showToast('💣 Bomb primed'); } else { explodeBall(activeBomb,1.0); } }
+    });
+
+  } catch (err) {
+    const el = document.getElementById('err');
+    el.style.display='flex';
+    el.textContent = 'Init error: ' + String(err && err.message || err);
+    console.error(err);
+  }
+})();</script>
+</body>
+</html>
