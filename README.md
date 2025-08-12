@@ -1,3 +1,3 @@
-# hexagon-ball-drop
+# gpt-5-games
 
-Live at https://appatalks.github.io/hexagon-ball-drop/
+Live at https://appatalks.github.io/gpt-5-games/
